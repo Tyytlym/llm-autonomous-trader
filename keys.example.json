@@ -1,0 +1,5 @@
+{
+  "apiKey": "在这里填你的币安 API Key",
+  "secret": "在这里填你的币安 API Secret",
+  "siliconflow": "在这里填任意 OpenAI 兼容接口的 API Key（可选）"
+}
