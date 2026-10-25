@@ -27,8 +27,33 @@ The model is never trusted with money directly. Every decision it produces is ch
 | 1. Data | `snapshot.py` | Fetch market data + account state → `latest_*.json` |
 | 2. Decision | `decide.py` | Feed snapshot to LLM, receive decision JSON |
 | 3. Guard | `guard.py` | Hard constraints + format checks; rejects anything invalid |
-| 4. Execution | `executor.py` | Hand-rolled HMAC signing, places orders incl. SL/TP |
-| 5. Trigger | `volwatch.py` | Hourly fallback + volatility-threshold early wake |
+| 4. Execution | `executor.py` | Hand-rolled HMAC signing, places orders incl. SL/TP + exit ladder |
+| 5. Trigger | `volwatch.py` | Hourly fallback + volatility-threshold early wake + exit patrol |
+
+### Exit management (v4)
+
+After a position opens, the executor places a **4-order exit ladder** in one shot:
+
+| # | Order | Trigger | Role | Qty |
+|---|-------|---------|------|-----|
+| 1 | Stop-loss (STOP_MARKET) | price breaks `stop_loss` | floor: max loss locked | full |
+| 2 | TP tier 1 (TAKE_PROFIT_MARKET) | price reaches +1R | take first profit | 30% |
+| 3 | TP tier 2 (TAKE_PROFIT_MARKET) | price reaches +2R | take second profit | 30% |
+| 4 | Trailing stop (TRAILING_STOP_MARKET) | pullback after activation | runs the tail | 40% |
+
+**R** = |actual fill price − stop_loss|. Computed once at fill from the real fill price, then locked.
+
+**Trailing stop notes:**
+- Placed at open, but carries an activation price (`entry + 2R`). Before 2R it is a "sleeping" order — no tracking, no trigger.
+- Once activated, the exchange tracks the highest price and sells the tail when it pulls back more than `trailing_callback_pct` (default 1%).
+- Runs entirely exchange-side: no local polling, no rate-limit risk.
+- Callback is a *percentage*, not an ATR distance (API constraint) — wider instruments see wider absolute moves at the same percent.
+
+**Breakeven raise:** after price passes 1R, the stop is raised to just above entry (`be_buffer_pct`), so the worst case is a scratch.
+
+**Active close patrol:** each decision cycle ends with `executor.py --manage <symbol>`; if peak drawdown exceeds `pullback_close_pct` (default 60%), it market-closes. Drawdown management is automated — the LLM only handles entries and structure.
+
+**Peak memory:** `state/position_peak.json` records entry/SL/peak per position. Written on open, cleared on close, updated each cycle. Don't delete it.
 
 ### The guard's three hard constraints
 
@@ -199,8 +224,34 @@ PolyForm Noncommercial License 1.0.0 — free for personal, research, educationa
 | 1. 数据 | `snapshot.py` | 拉三品种行情 + 账户状态，落 `latest_*.json` |
 | 2. 决策 | `decide.py` | 把快照喂给 LLM，拿回决策 JSON |
 | 3. 校验 | `guard.py` | 守门员：硬约束 + 格式关，不合规一律拒 |
-| 4. 执行 | `executor.py` | 手搓 HMAC 签名下单，含止损/止盈条件单 |
-| 5. 触发 | `volwatch.py` | 定时兜底 + 波动阈值提前唤醒 |
+| 4. 执行 | `executor.py` | 手搓 HMAC 签名下单，含止损/止盈条件单 + 出场阶梯 |
+| 5. 触发 | `volwatch.py` | 定时兜底 + 波动阈值提前唤醒 + 出场巡检 |
+
+### 出场管理（v4）
+
+开仓后，执行器一次性挂 **4 张单**组成出场阶梯：
+
+| # | 单类型 | 触发条件 | 作用 | 数量 |
+|---|--------|----------|------|------|
+| 1 | 全平止损 STOP_MARKET | 价格跌破决策的 stop_loss | 兜底：最大亏损锁死 | 全仓 |
+| 2 | 档1止盈 TAKE_PROFIT_MARKET | 价格到达 +1R | 分批落袋第一批 | 30% |
+| 3 | 档2止盈 TAKE_PROFIT_MARKET | 价格到达 +2R | 分批落袋第二批 | 30% |
+| 4 | 跟踪止损 TRAILING_STOP_MARKET | 激活后从峰值回撤 | 接管尾仓，锁住大肉 | 40% |
+
+**R 的计算**：R = |真实成交价 − 止损价|。开仓成交瞬间用真实成交价（非快照价）算好 1R/2R 目标价，之后锁死不变。
+
+**跟踪止损要点**：
+
+- 开仓即挂单，但带激活价（入场价 + 2R）：价格未到 2R 前是"睡眠单"，不盯盘、不触发
+- 价格触及激活价后，交易所开始记录持仓最高价，从最高价回撤超过 `trailing_callback_pct`（默认 1%）即市价卖出尾仓
+- 全程在交易所内部运行，本地不需要轮询，也不受限频影响
+- 回调率为百分比而非 ATR 距离（交易所 API 限制），波动大的品种同样百分比对应更大价格空间
+
+**保本抬升**：价格走过 1R 后，把止损从原价抬到入场价上方一点（`be_buffer_pct`），最差白忙、不伤本金。
+
+**主动平仓巡检**：每轮决策链末尾执行 `executor.py --manage <symbol>`，持仓峰值回撤超过 `pullback_close_pct`（默认 60%）即市价主动平仓。回吐管理交给自动化，决策模型只负责入场与结构判断。
+
+**峰值记忆**：`state/position_peak.json` 记录每笔持仓的入场/止损/峰值，开仓写入、平仓清除、每轮更新。别删。
 
 ### 守门员的三根硬约束
 

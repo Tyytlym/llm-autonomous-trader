@@ -114,6 +114,13 @@ def refresh_snapshot(sym):
         return False
 
 
+def refresh_all(symbols):
+    """每轮无条件给所有品种刷一次快照，失败只记日志不中断。"""
+    for sym in symbols:
+        ok = refresh_snapshot(sym)
+        logline("SNAPSHOT_TICK %s %s" % (sym, "OK" if ok else "FAIL"))
+
+
 def run_chain(sym, why, px=None):
     """
     跑一次完整决策链：decide -> guard -> executor
@@ -183,6 +190,14 @@ def run_chain(sym, why, px=None):
         erc = r.returncode
         eout = ((r.stdout or "") + (r.stderr or "")).strip()
         logline("EXEC %s rc=%d\n%s" % (sym, erc, eout[-1200:]))
+        # 5) 出场巡检：独立子进程，只读+条件平仓，不决策
+        try:
+            mcmd = [sys.executable, ep, "--manage", sym]
+            mr = subprocess.run(mcmd, cwd=BIN, capture_output=True, text=True, timeout=90)
+            mout = ((mr.stdout or "") + (mr.stderr or "")).strip()
+            logline("EXIT_MANAGE %s rc=%d\n%s" % (sym, mr.returncode, mout[-600:]))
+        except Exception as me:
+            logline("EXIT_MANAGE_EXC %s %s" % (sym, me))
         logline("CHAIN_DONE %s rc=%d 耗时%dms" % (sym, erc, now_ms() - t0))
         return erc
     except Exception as e:
@@ -200,9 +215,12 @@ def next_symbol(symbols):
 
 
 def do_hourly(cfg, symbols):
-    sym = next_symbol(symbols)
-    logline("HOURLY_TRIG 轮换到 %s" % sym)
-    return run_chain(sym, "hourly")
+    """定时唤醒：所有品种都跑一次决策链。"""
+    logline("HOURLY_TRIG 全品种 %s" % ",".join(symbols))
+    rc = 0
+    for sym in symbols:
+        rc = run_chain(sym, "hourly")
+    return rc
 
 
 def do_vol(cfg, symbols, vol_state):
@@ -283,10 +301,12 @@ def main():
 
     while True:
         try:
-            # 兜底：到点就叫
-            if now_ms() - last_hourly >= HOURLY_SEC * 1000:
-                do_hourly(cfg, symbols)
-                last_hourly = now_ms()
+            # 每轮无条件刷全部品种快照（不论行情动不动）
+            refresh_all(symbols)
+
+            # 定时唤醒：每轮循环都跑一次全部品种决策
+            do_hourly(cfg, symbols)
+            last_hourly = now_ms()
 
             # 波动：每轮都探
             if not no_vol:

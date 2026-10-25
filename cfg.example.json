@@ -1,15 +1,24 @@
 {
-  "_comment": "复制为 cfg.json 后按需修改。model_endpoint 可指向任意 OpenAI 兼容接口。",
+  "_comment": "复制为 cfg.json 后按需修改。model_endpoint 可指向任意 OpenAI 兼容接口，例如 https://你的服务商域名/v1/chat/completions",
   "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
   "risk_pct": 0.02,
   "max_notional_usdt": 500,
   "vol_threshold_pct": 0.5,
   "snapshot_max_age_ms": 120000,
-  "model_endpoint": "https://api.siliconflow.cn/v1/chat/completions",
-  "model": "deepseek-ai/DeepSeek-V3",
+  "model_endpoint": "https://your-provider.example.com/v1/chat/completions",
+  "model": "your-model-name",
   "model_temperature": 0.2,
   "model_max_tokens": 2000,
   "min_sec_between_orders": 60,
   "recover_loss_streak_max": 3,
-  "cooldown_after_streak_min": 60
+  "cooldown_after_streak_min": 60,
+  "exit": {
+    "tiers": [0.30, 0.30, 0.40],
+    "tier1_r": 1.0,
+    "tier2_r": 2.0,
+    "be_buffer_pct": 0.002,
+    "trailing_callback_pct": 1.0,
+    "trailing_activation_r": 2.0,
+    "pullback_close_pct": 0.6
+  }
 }

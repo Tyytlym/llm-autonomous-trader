@@ -23,11 +23,13 @@ sys.path.insert(0, BIN_DIR)
 import guard  # noqa: E402
 
 LOG_DIR = os.path.join(BASE, "log")
+STATE_DIR = os.path.join(BASE, "state")
 TESTNET = "https://testnet.binancefuture.com"
 _key = json.load(open(os.path.join(BASE, "keys.json")))
 API_KEY, API_SECRET = _key["apiKey"], _key["secret"]
 _offset = 0
 _info = {"stepSize": {}, "minNotional": {}}  # symbol -> 值
+PEAK_PATH = os.path.join(STATE_DIR, "position_peak.json")
 
 def pub(path):
     return json.loads(urlopen(TESTNET + path, timeout=20).read().decode("utf-8", "replace"))
@@ -151,25 +153,186 @@ def wait_fill(sym, order_id, tries=6, pause=0.5):
         time.sleep(pause)
     return None, None
 
-def place_sltp(dec, xside):
-    """交易所侧止损/止盈：algo 条件单 POST /fapi/v1/algoOrder；triggerPrice 触发价；closePosition=true 触发即全平"""
+def load_cfg():
+    """读 cfg.json；失败返回空 dict（用默认值兜底）"""
+    try:
+        with open(os.path.join(BASE, "cfg.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def load_peak():
+    try:
+        with open(PEAK_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_peak(d):
+    tmp = PEAK_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, PEAK_PATH)
+
+def set_peak(sym, side, entry_px, sl):
+    d = load_peak()
+    d[sym] = {"side": side, "entry": entry_px, "sl": sl,
+              "peak": entry_px, "ts": int(time.time() * 1000)}
+    save_peak(d)
+
+def clear_peak(sym):
+    d = load_peak()
+    if sym in d:
+        del d[sym]
+        save_peak(d)
+
+def split_tiers(qty, tiers, sym):
+    """按比例拆分数量到分批档，逐档向下取整到 step；不够拆的档跳过（并入尾仓）。
+    tiers 末尾一项视为尾仓比例，不拆成分批单；其余为分批止盈档。
+    返回 (list[(ratio, qty_str)], tail_str)；tail 为尾仓（跟踪止损用），不足 step 时为 0。"""
+    step = q_step(sym)
+    qty_dec = Decimal(str(qty))
+    batch_tiers = list(tiers[:-1]) if len(tiers) > 1 else []
+    used = Decimal("0")
+    out = []
+    for r in batch_tiers:
+        raw = (qty_dec * Decimal(str(r)) // step) * step
+        if raw <= 0:
+            continue
+        out.append((r, format(raw.normalize(), "f")))
+        used += raw
+    tail = (qty_dec - used) // step * step
+    if tail < step:
+        tail = Decimal("0")
+    return out, format(tail.normalize(), "f")
+
+def place_exit(dec, xside, entry_px, filled_qty, cfg):
+    """开仓后挂全套出场：常规全平止损 + 分批止盈（30/30/40 按 R 分档） + 尾仓跟踪止损。
+    xside=SELL 表示多单的平仓方向，BUY 表示空单平仓方向。
+    数量拆不开的档自动跳过并入尾仓，宁可少分档不硬挂 0 数量。"""
     sym = dec["symbol"]
     out = {}
+    sl = float(dec["stop_loss"])
+    dist = abs(entry_px - sl)          # 1R 的价格距离
+    if dist <= 0:
+        raise RuntimeError("EXIT_DIST_ZERO")
+    ex = cfg.get("exit") or {}
+    tiers = ex.get("tiers") or [0.30, 0.30, 0.40]
+    tier1_r = float(ex.get("tier1_r", 1.0))
+    tier2_r = float(ex.get("tier2_r", 2.0))
+    callback = str(ex.get("trailing_callback_pct", 1.0))
+    act_r = float(ex.get("trailing_activation_r", 2.0))
+    sign = 1 if xside == "SELL" else -1   # 多单盈利向上 +1，空单向下 -1
+    t1 = entry_px + sign * dist * tier1_r
+    t2 = entry_px + sign * dist * tier2_r
+    # 1) 常规全平止损（兜底，触发即清仓）
     code, body = call("POST", "/fapi/v1/algoOrder", {
         "symbol": sym, "side": xside, "type": "STOP_MARKET", "algoType": "CONDITIONAL",
-        "triggerPrice": format(Decimal(str(dec["stop_loss"])), "f"),
+        "triggerPrice": format(Decimal(str(sl)), "f"),
         "closePosition": "true", "workingType": "CONTRACT_PRICE"})
     out["stop_loss"] = must(code, body, "STOP_LOSS")
-    tp = dec.get("take_profit")
-    if tp is not None:
+    # 2) 分批止盈：档1(1R)/档2(2R) 各挂一张部分量 TAKE_PROFIT_MARKET
+    tier_qty, tail_str = split_tiers(filled_qty, tiers, sym)
+    trigs = [t1, t2]
+    out["tiers"] = []
+    for i, (ratio, qstr) in enumerate(tier_qty):
+        if i >= len(trigs):
+            break
         code, body = call("POST", "/fapi/v1/algoOrder", {
             "symbol": sym, "side": xside, "type": "TAKE_PROFIT_MARKET", "algoType": "CONDITIONAL",
-            "triggerPrice": format(Decimal(str(tp)), "f"),
-            "closePosition": "true", "workingType": "CONTRACT_PRICE"})
-        out["take_profit"] = must(code, body, "TAKE_PROFIT")
+            "triggerPrice": format(trigs[i], "f"), "quantity": qstr,
+            "reduceOnly": "true", "workingType": "CONTRACT_PRICE"})
+        out["tiers"].append({"ratio": ratio, "qty": qstr,
+                             "trigger": trigs[i], "resp": must(code, body, "TP_TIER%d" % (i + 1))})
+    # 3) 尾仓跟踪止损（从峰值回调 callback% 触发，reduceOnly 只平不减）
+    if tail_str != "0":
+        activation = format(entry_px + sign * dist * act_r, "f")
+        code, body = call("POST", "/fapi/v1/algoOrder", {
+            "symbol": sym, "side": xside, "type": "TRAILING_STOP_MARKET", "algoType": "CONDITIONAL",
+            "quantity": tail_str, "callbackRate": callback, "activationPrice": activation,
+            "reduceOnly": "true", "workingType": "CONTRACT_PRICE"})
+        out["trailing"] = {"qty": tail_str, "activation": activation,
+                           "resp": must(code, body, "TRAILING")}
     else:
-        out["take_profit"] = None
+        out["trailing"] = None
     return out
+
+def get_open_sl(sym):
+    """查当前挂着的常规止损单（STOP_MARKET algo 单）"""
+    code, body = call("GET", "/fapi/v1/openAlgoOrders", {"symbol": sym})
+    if code != 200:
+        return None
+    try:
+        for it in json.loads(body):
+            if it.get("orderType") == "STOP_MARKET":
+                return it
+    except Exception:
+        return None
+    return None
+
+def raise_breakeven(sym, rec, cfg):
+    """价格已走过 1R 且止损还在原价时，把止损抬到入场价上方 buffer 处（保本线）"""
+    side = rec.get("side", "long")
+    entry = float(rec["entry"])
+    sl = float(rec.get("sl") or 0)
+    if sl <= 0:
+        return {"action": "no_sl_record"}
+    dist = abs(entry - sl)
+    ex = cfg.get("exit") or {}
+    tier1_r = float(ex.get("tier1_r", 1.0))
+    buffer_pct = float(ex.get("be_buffer_pct", 0.002))
+    sign = 1 if side == "long" else -1
+    be_price = entry + sign * entry * buffer_pct   # 入场价上方一点点（含手续费余量）
+    target1 = entry + sign * dist * tier1_r
+    peak = float(rec["peak"])
+    reached = (peak >= target1) if side == "long" else (peak <= target1)
+    if not reached:
+        return {"action": "wait"}                  # 还没走过 1R，不抬
+    cur = get_open_sl(sym)
+    if not cur:
+        return {"action": "no_sl_open"}            # 止损单不见了（可能已触发/被撤）
+    cur_px = float(cur.get("triggerPrice") or 0)
+    need_raise = (cur_px < be_price) if side == "long" else (cur_px > be_price)
+    if not need_raise:
+        return {"action": "already"}               # 已经在保本线上方/下方
+    aid = cur.get("algoId")
+    c, b = call("DELETE", "/fapi/v1/algoOrder", {"symbol": sym, "algoId": aid})
+    must(c, b, "BE_CANCEL")
+    code, body = call("POST", "/fapi/v1/algoOrder", {
+        "symbol": sym, "side": "SELL" if side == "long" else "BUY",
+        "type": "STOP_MARKET", "algoType": "CONDITIONAL",
+        "triggerPrice": format(be_price, "f"),
+        "closePosition": "true", "workingType": "CONTRACT_PRICE"})
+    out = must(code, body, "BE_RAISE")
+    return {"action": "raised", "be_price": be_price, "algo": out}
+
+def manage_exit(symbol, cfg):
+    """出场巡检（volwatch 每轮调用）：
+       1) 有持仓则更新峰值；2) 峰值回撤超阈值 -> 主动平仓；3) 走过 1R -> 抬保本止损。"""
+    sym = symbol
+    rec = load_peak().get(sym)
+    if not rec:
+        return {"action": "no_peak"}
+    code, body = call("GET", "/fapi/v2/positionRisk", {"symbol": sym})
+    rows = [e for e in must(code, body, "MANAGE_POS") if float(e.get("positionAmt") or 0) != 0.0]
+    if not rows:
+        clear_peak(sym)
+        return {"action": "no_position_cleared"}
+    px = float(pub("/fapi/v1/ticker/price?symbol=%s" % sym)["price"])
+    side = rec.get("side", "long")
+    peak = float(rec["peak"])
+    if (side == "long" and px > peak) or (side == "short" and px < peak):
+        rec["peak"] = px
+        rec["ts"] = int(time.time() * 1000)
+        d = load_peak(); d[sym] = rec; save_peak(d)
+    ex = cfg.get("exit") or {}
+    pull = float(ex.get("pullback_close_pct", 0.6))
+    dd = ((peak - px) / peak) if side == "long" else ((px - peak) / peak) if peak > 0 else 0
+    if dd >= pull:
+        outcome = market_close({"symbol": sym})   # 主动平仓（回吐超阈值）
+        return {"action": "close_drawdown", "dd": round(dd, 4), "outcome": outcome}
+    be = raise_breakeven(sym, rec, cfg)
+    return {"action": "manage", "dd": round(dd, 4), "be": be}
 
 def market_open(dec, px):
     sym, action = dec["symbol"], dec["action"]
@@ -186,7 +349,10 @@ def market_open(dec, px):
                            ((cur or {}).get("status"), filled))
     out = {"entry": {"orderId": o.get("orderId"), "status": (cur or {}).get("status"),
                      "executedQty": filled, "avgPrice": (cur or {}).get("avgPrice")}}
-    out["sl_tp"] = place_sltp(dec, xside)
+    cfg = load_cfg()
+    entry_px = float((cur or {}).get("avgPrice") or px)
+    out["exit"] = place_exit(dec, xside, entry_px, filled, cfg)
+    set_peak(sym, "long" if action == "open_long" else "short", entry_px, float(dec["stop_loss"]))
     return out
 
 def market_close(dec):
@@ -211,6 +377,7 @@ def market_close(dec):
         out.append({"orderId": o.get("orderId"), "status": (cur or {}).get("status"),
                     "executedQty": filled, "avgPrice": (cur or {}).get("avgPrice")})
     cleanup = cancel_stale(sym)  # 平仓后兜底再撤一遍，条件单零残留
+    clear_peak(sym)
     return {"orders": out, "cancelled": cancelled, "cleanup": cleanup}
 
 def emergency_flatten(sym):
@@ -226,6 +393,7 @@ def emergency_flatten(sym):
                     "reduceOnly": "true"})
                 must(code2, body2, "FLATTEN")
         cancel_stale(sym)  # 收尾再清一遍残留挂单
+        clear_peak(sym)
         return "FLATTENED"
     except Exception as ex2:
         try:
@@ -271,16 +439,33 @@ def run(raw, symbol, dry, source="text"):
         return {"guard_passed": True, "action": act, "result": "ERROR",
                 "error": repr(e)[:300], "safety": flat}, 4
 
+def run_manage(symbol):
+    """独立出场巡检：被 volwatch 每轮调用。只读+条件平仓，不决策。"""
+    try:
+        t0 = must(*call("GET", "/fapi/v1/time", {}), "TIME")["serverTime"]
+        _offset = t0 - int(time.time() * 1000)
+        load_filters()
+        cfg = load_cfg()
+        res = manage_exit(symbol, cfg)
+        print(json.dumps(res, ensure_ascii=False))
+        return 0
+    except Exception as e:
+        print(json.dumps({"action": "error", "error": repr(e)[:300]}, ensure_ascii=False))
+        return 1
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("symbol", nargs="?", default="BTCUSDT")
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--file")
     g.add_argument("--text")
+    ap.add_argument("--manage", action="store_true", help="出场巡检模式（volwatch 每轮调用）")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
-    raw = open(args.file, encoding="utf-8").read() if args.file else args.text
     os.makedirs(LOG_DIR, exist_ok=True)
+    if args.manage:
+        sys.exit(run_manage(args.symbol))
+    raw = open(args.file, encoding="utf-8").read() if args.file else args.text
     summary, code = run(raw, args.symbol, args.dry_run,
                         "file" if args.file else "text")
     print(json.dumps(summary, ensure_ascii=False))

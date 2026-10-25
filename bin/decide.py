@@ -12,7 +12,7 @@ decide.py - 零号决策器（脱离 Operit 版）
 用法:
   python3 decide.py BTCUSDT                 # 用最新快照做一次决策
   python3 decide.py BTCUSDT --dry-run       # 只拼 prompt 打印，不调模型
-  python3 decide.py BTCUSDT --model deepseek-ai/DeepSeek-V3
+  python3 decide.py BTCUSDT --model deepseek-ai/DeepSeek-V4.1-Flash
 
 退出码:
   0 正常（决策文件已落盘）
@@ -146,12 +146,11 @@ def extract_json_array(text):
 def call_model(cfg, keys, system_prompt, user_message, model, dry_run=False):
     sf = keys.get("siliconflow") or ""
     if not sf or sf.startswith("请") or len(sf) < 20:
-        print("[FATAL] keys.json 里 siliconflow 字段未填或明显是占位符"
-              "（该字段存放任意 OpenAI 兼容接口的 API Key）")
+        print("[FATAL] keys.json 里 siliconflow 未填或明显是占位符")
         sys.exit(2)
 
     endpoint = cfg.get("model_endpoint") or "https://api.siliconflow.cn/v1/chat/completions"
-    model = model or cfg.get("model") or "deepseek-ai/DeepSeek-V3"
+    model = model or cfg.get("model") or "deepseek-ai/DeepSeek-V4.1-Flash"
     temperature = cfg.get("model_temperature", 0.2)
     max_tokens = cfg.get("model_max_tokens", 2000)
     timeout = cfg.get("model_timeout_sec", 90)
