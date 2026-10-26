@@ -53,8 +53,6 @@ After a position opens, the executor places a **4-order exit ladder** in one sho
 
 **Active close patrol:** each cycle may end with `executor.py --manage <symbol>`; if peak drawdown exceeds `pullback_close_pct`, it market-closes. In v5 this is **off by default** (`exit_manage:false`) — the exchange-side ladder does the work; flip it on if you want local drawdown patrol too.
 
-**Peak memory:** `state/position_peak.json` records entry/SL/peak per position. Written on open, cleared on close. Don't delete it.
-
 ### The guard's three hard constraints
 
 No matter what the LLM returns, these are never negotiable:
@@ -286,8 +284,6 @@ PolyForm Noncommercial License 1.0.0 — free for personal, research, educationa
 **主动平仓巡检**：每轮决策链末尾可执行 `executor.py --manage <symbol>`，峰值回撤超阈值即市价平仓。v5 起**默认关闭**（`exit_manage:false`）——浮盈保护由交易所侧条件单负责，想加本地巡检再打开。
 
 **跟踪止损要点**：开仓即挂，带激活价（入场价 + 2R）；未到激活价前是"睡眠单"；激活后由交易所记录峰值、回撤超 `trailing_callback_pct`（默认1%）即卖出尾仓。回调率为百分比而非 ATR 距离（API 限制）。
-
-**峰值记忆**：`state/position_peak.json` 记录每笔持仓的入场/止损/峰值，开仓写入、平仓清除。别删。
 
 ### 守门员的三根硬约束
 
