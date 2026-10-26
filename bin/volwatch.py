@@ -82,6 +82,67 @@ def save_json(path, obj):
     os.replace(tmp, path)
 
 
+def trim_live_log(path, max_bytes=5 * 1024 * 1024, keep_lines=500):
+    """活日志超过体积阈值时，只保留末尾 keep_lines 行，前面内容丢弃。文件保留不删。"""
+    try:
+        if os.path.getsize(path) <= max_bytes:
+            return False
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        tail = lines[-keep_lines:] if len(lines) > keep_lines else lines
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.writelines(tail)
+        os.replace(tmp, path)
+        logline("LOG_TRIM 活日志超过%dMB，保留末尾%d行" % (max_bytes // 1024 // 1024, len(tail)))
+        return True
+    except Exception as e:
+        logline("LOG_TRIM_FAIL %s: %s" % (type(e).__name__, e))
+        return False
+
+
+def cleanup_logs(days=15):
+    """按天清理过期日志。只删快照/运行日志，决策与执行记录永久保留。
+    活日志 volwatch_live.out 不按天数处理，由 trim_live_log 按体积裁剪。"""
+    now = time.time()
+    cutoff = now - days * 86400
+    removed = 0
+    for name in os.listdir(LOG):
+        path = os.path.join(LOG, name)
+        if not os.path.isfile(path):
+            continue
+        # 永久保留：决策记录、执行记录
+        if name.startswith("decision_") or name.startswith("exec_"):
+            continue
+        # 活日志交给他函数按体积裁，不在这里按天数删
+        if name == "volwatch_live.out":
+            continue
+        try:
+            mtime = os.path.getmtime(path)
+        except Exception:
+            continue
+        if mtime >= cutoff:
+            continue
+        # 活日志：清空内容，不删文件（避免进程句柄失效）
+        if name == "volwatch_live.out":
+            try:
+                with open(path, "w", encoding="utf-8"):
+                    pass
+                removed += 1
+            except Exception:
+                pass
+            continue
+        # 其余过期日志直接删
+        try:
+            os.remove(path)
+            removed += 1
+        except Exception:
+            pass
+    if removed:
+        logline("LOG_CLEANUP 清理%d个过期日志(保留%d天)" % (removed, days))
+    return removed
+
+
 def probe(sym):
     """探现价。不带签名，公开端点。返回 (px, err)。"""
     url = TESTNET + "/fapi/v1/ticker/price?symbol=" + sym
@@ -126,6 +187,7 @@ def run_chain(sym, why, px=None):
     跑一次完整决策链：decide -> guard -> executor
     每一步退出码不阻断后续（guard 拒绝是正常结果，不是故障）。
     用 && 串会在 guard 返回 2 时停住，这里显式分开跑，保证日志都拿到。
+    链末：对该品种执行出场巡检（若有持仓则更新峰值/抬保本/主动平仓）。
     """
     t0 = now_ms()
     logline("CHAIN_START %s why=%s px=%s" % (sym, why, px))
@@ -190,14 +252,16 @@ def run_chain(sym, why, px=None):
         erc = r.returncode
         eout = ((r.stdout or "") + (r.stderr or "")).strip()
         logline("EXEC %s rc=%d\n%s" % (sym, erc, eout[-1200:]))
-        # 5) 出场巡检：独立子进程，只读+条件平仓，不决策
-        try:
-            mcmd = [sys.executable, ep, "--manage", sym]
-            mr = subprocess.run(mcmd, cwd=BIN, capture_output=True, text=True, timeout=90)
-            mout = ((mr.stdout or "") + (mr.stderr or "")).strip()
-            logline("EXIT_MANAGE %s rc=%d\n%s" % (sym, mr.returncode, mout[-600:]))
-        except Exception as me:
-            logline("EXIT_MANAGE_EXC %s %s" % (sym, me))
+        # 5) 出场巡检：默认关闭（配置 exit_manage=true 才启用）。
+        #    浮盈保护由交易所侧条件单（SL/分批止盈/尾仓移动止损）负责，本地巡检不再参与。
+        if load_json(CFG_PATH).get("exit_manage", False):
+            try:
+                mcmd = [sys.executable, ep, "--manage", sym]
+                mr = subprocess.run(mcmd, cwd=BIN, capture_output=True, text=True, timeout=90)
+                mout = ((mr.stdout or "") + (mr.stderr or "")).strip()
+                logline("EXIT_MANAGE %s rc=%d\n%s" % (sym, mr.returncode, mout[-600:]))
+            except Exception as me:
+                logline("EXIT_MANAGE_EXC %s %s" % (sym, me))
         logline("CHAIN_DONE %s rc=%d 耗时%dms" % (sym, erc, now_ms() - t0))
         return erc
     except Exception as e:
@@ -282,6 +346,9 @@ def main():
 
     vol_state = load_vol_state()
     last_hourly = now_ms()
+    # 启动时清一次过期日志
+    cleanup_logs(15)
+    last_cleanup = now_ms()
     # 启动时先初始化基线，避免第一轮就因「无基线」瞎触发
     if not no_vol:
         for sym in symbols:
@@ -303,6 +370,12 @@ def main():
         try:
             # 每轮无条件刷全部品种快照（不论行情动不动）
             refresh_all(symbols)
+
+            # 每小时清一次过期日志（决策/执行记录永久保留）
+            if now_ms() - last_cleanup >= 3600 * 1000:
+                cleanup_logs(15)
+                trim_live_log(os.path.join(LOG, "volwatch_live.out"))
+                last_cleanup = now_ms()
 
             # 定时唤醒：每轮循环都跑一次全部品种决策
             do_hourly(cfg, symbols)

@@ -1,0 +1,154 @@
+# ========== 艾艾酱加的快捷指令（2026 起用） ==========
+# snap   查三品种快照：价格 + 新鲜度（几分钟前）
+snap() { python3 -c '
+import json,time
+for s in ["BTCUSDT","ETHUSDT","SOLUSDT"]:
+    p="/data/data/com.termux/files/home/binance/state/latest_%s.json"%s
+    try:
+        d=json.load(open(p))
+        age=(time.time()*1000-d.get("ts_ms",0))/1000/60
+        print("%-8s price=%-10s age=%.1f分钟"%(s,d["market_data"]["price"],age))
+    except Exception as e:
+        print(s,"读不到:",e)
+'; }
+
+# vwfind  查常驻进程（直读 /proc/cmdline；只认「脚本当文件参数」的进程，排除 python -c 自匹配）
+vwfind() { python3 -c '
+import os
+for pid in os.listdir("/proc"):
+    if not pid.isdigit():
+        continue
+    try:
+        cmd = open("/proc/%s/cmdline" % pid, "rb").read().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+    except Exception:
+        continue
+    parts = cmd.split()
+    # 只认 python[s] <script.py> 这种：argv[1] 是 .py 文件
+    if len(parts) >= 2 and "python" in parts[0] and parts[1].endswith(".py") \
+       and ("volwatch.py" in parts[1] or "webui.py" in parts[1]):
+        print(pid, cmd)
+'; }
+
+# vwps   查 volwatch 进程在不在（直读 /proc，排除 python -c 自匹配）
+vwps() { python3 -c '
+import os
+found = []
+for pid in os.listdir("/proc"):
+    if not pid.isdigit():
+        continue
+    try:
+        cmd = open("/proc/%s/cmdline" % pid, "rb").read().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+    except Exception:
+        continue
+    parts = cmd.split()
+    if len(parts) >= 2 and "python" in parts[0] and parts[1].endswith(".py") \
+       and "volwatch.py" in parts[1]:
+        found.append((pid, cmd))
+if not found:
+    print("volwatch 没在跑")
+else:
+    for pid, cmd in found:
+        print(pid, cmd)
+'; }
+
+# vwres  重启 volwatch（先杀干净再单起一个，末尾核验）
+vwres() {
+  pkill -f '[v]olwatch.py' 2>/dev/null
+  sleep 1
+  cd ~/binance && nohup python bin/volwatch.py >> log/volwatch_live.out 2>&1 &
+  sleep 2
+  vwps
+}
+
+# dec    看今天最新几条决策（今天没有文件就自动翻最近一天的）
+dec() { f=~/binance/log/decide_$(date +%Y-%m-%d).jsonl; [ -f "$f" ] && tail -n 3 "$f" || tail -n 3 $(ls -t ~/binance/log/decide_*.jsonl 2>/dev/null | head -1); }
+
+# decs   决策精简版：时间 | 模型 | 唤醒原因 | 动作
+decs() { python3 -c '
+import json,glob,datetime
+f=sorted(glob.glob("/data/data/com.termux/files/home/binance/log/decide_*.jsonl"))[-1]
+for line in open(f).readlines()[-5:]:
+    d=json.loads(line)
+    t=datetime.datetime.fromtimestamp(d["logged_at"]/1000).strftime("%m-%d %H:%M:%S")
+    acts=[x.get("action") for x in d.get("decisions",[])]
+    print(t,"|",d.get("model"),"|",d.get("wake_reason"),"|",acts)
+'; }
+
+# wl     看 volwatch 实时输出尾巴（排障首选）
+wl() { tail -50 ~/binance/log/volwatch_live.out; }
+
+# ex     看今天执行日志（下单记录+结果；今天没有自动翻最近一天）
+ex() { f=~/binance/log/exec_$(date +%Y-%m-%d).jsonl; [ -f "$f" ] && tail -30 "$f" || tail -30 $(ls -t ~/binance/log/exec_*.jsonl 2>/dev/null | head -1); }
+
+# bal     看钱包：总余额 | 可用 | 浮盈
+bal() { python3 -c '
+import json,glob
+f=sorted(glob.glob("/data/data/com.termux/files/home/binance/state/latest_*.json"))[0]
+d=json.load(open(f))
+a=d.get("account",{})
+print("总余额=%.4f  可用=%.4f  浮盈=%.4f" % (a.get("totalWalletBalance",0), a.get("availableBalance",0), a.get("totalUnrealizedProfit",0)))
+'; }
+
+# pos     看当前持仓（方向/数量/入场/现价/浮盈；直连交易所实时查，不依赖快照过滤）
+pos() { python3 -c '
+import json,hmac,hashlib,time,urllib.request,urllib.error,os
+BASE="https://testnet.binancefuture.com"
+keys=json.load(open(os.path.expanduser("~/binance/keys.json")))
+apik,sec=keys["apiKey"],keys["secret"]
+def signed(path):
+    q=path.split("?")[1] if "?" in path else ""
+    p={"timestamp":int(time.time()*1000),"recvWindow":20000}
+    if q:
+        for kv in q.split("&"):
+            k,v=kv.split("="); p[k]=v
+    qs="&".join("%s=%s"%(a,b) for a,b in p.items())
+    sig=hmac.new(sec.encode(),qs.encode(),hashlib.sha256).hexdigest()
+    req=urllib.request.Request(BASE+path+"?"+qs+"&signature="+sig,headers={"X-MBX-APIKEY":apik})
+    try:
+        return json.loads(urllib.request.urlopen(req,timeout=20).read().decode())
+    except urllib.error.HTTPError as e:
+        return {"_err":e.code,"_body":e.read().decode()[:200]}
+rows=signed("/fapi/v2/positionRisk")
+if isinstance(rows,dict) and rows.get("_err"):
+    print("查询失败 HTTP",rows["_err"],rows["_body"]); raise SystemExit
+pos=[p for p in rows if float(p.get("positionAmt") or 0)!=0]
+if not pos:
+    print("当前无持仓")
+else:
+    for p in pos:
+        side="多" if float(p["positionAmt"])>0 else "空"
+        print("%-9s %s %.4f  入场=%.4f 现价=%.4f 浮盈=%.4f" % (p["symbol"],side,abs(float(p["positionAmt"])),float(p["entryPrice"]),float(p["markPrice"]),float(p["unRealizedProfit"])))
+'; }
+
+# tr      看平仓账本：最近 10 笔平仓，每笔含入场/出场/数量/已实现盈亏/净盈亏（含手续费），末尾带总计
+tr() { python3 -c '
+import json,datetime,glob
+fs=sorted(glob.glob("/data/data/com.termux/files/home/binance/state/trades.jsonl"))
+if not fs:
+    print("账本还没有记录")
+    raise SystemExit
+lines=open(fs[-1],encoding="utf-8").read().splitlines()
+trades=[json.loads(l) for l in lines if l.strip()]
+total=0.0
+for t in trades[-10:]:
+    ts=datetime.datetime.fromtimestamp(t["ts"]/1000).strftime("%m-%d %H:%M")
+    side="多" if t["side"]=="long" else "空"
+    print("%s %-9s %s qty=%-8s 入=%-10s 出=%-10s 净盈亏=%+.4f (%s)" % (ts,t["symbol"],side,t.get("qty"),round(t.get("entry") or 0,4),round(t.get("exit") or 0,4),t.get("net_pnl",0),t.get("reason")))
+    total+=t.get("net_pnl",0)
+print("---- 全部 %d 笔 累计净盈亏 %+.4f ----" % (len(trades),total))
+'; }
+
+# res     一键重启全套常驻进程（volwatch + webui）：先杀干净再拉起，末尾核验
+# 常驻就 2 个：volwatch(调度) + webui(看板)，snapshot/decide/executor 是临时子进程不用管
+res() {
+  pkill -f '[v]olwatch.py' 2>/dev/null
+  pkill -f '[w]ebui.py' 2>/dev/null
+  sleep 1
+  cd ~/binance || { echo "进不去 ~/binance"; return 1; }
+  nohup python bin/volwatch.py >> log/volwatch_live.out 2>&1 &
+  sleep 0.5
+  cd ~/binance/webui || { echo "进不去 webui 目录"; return 1; }
+  nohup python3 webui.py 8123 >> webui.log 2>&1 &
+  sleep 2
+  vwfind
+}

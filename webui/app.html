@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>零号看板</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #09090B;
+    --fg: #FAFAFA;
+    --fg2: #A1A1AA;
+    --fg3: #52525B;
+    --accent: #34D399;      /* 唯一强调色：极光绿 */
+    --neg: #F87171;         /* 亏损红（克制） */
+    --warn: #FBBF24;
+    --r: 20px;
+    --rs: 12px;
+    --mono: 'Inter', -apple-system, system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    --ease: cubic-bezier(.22, 1, .36, 1);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { min-height:100%; }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--mono);
+    font-feature-settings: "tnum" 1, "cv03" 1;
+    -webkit-font-smoothing: antialiased;
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 0 16px 72px;
+  }
+
+  /* 背景：极暗渐变打底 + 微光晕，底部带一点暗紫渐变（克制，不抢玻璃） */
+  body::before {
+    content:""; position:fixed; inset:0; z-index:-2; pointer-events:none;
+    background:
+      radial-gradient(480px 380px at 12% -3%, rgba(30,27,75,.16), transparent 62%),
+      radial-gradient(560px 480px at 88% 92%, rgba(62,26,116,.20), transparent 60%),
+      radial-gradient(380px 340px at 30% 78%, rgba(15,80,120,.07), transparent 62%),
+      linear-gradient(172deg, #0c0c14 0%, #09090B 55%, #150b26 100%);
+  }
+
+  /* 全站最顶层噪点：消除塑料感 */
+  body::after {
+    content:""; position:fixed; inset:0; z-index:99; pointer-events:none; opacity:.03;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* ===== 真正的高级磨砂玻璃 ===== */
+  .glass-panel {
+    position:relative;
+    background: linear-gradient(145deg, rgba(255,255,255,.04) 0%, rgba(255,255,255,.01) 100%);
+    backdrop-filter: blur(24px) saturate(120%);
+    -webkit-backdrop-filter: blur(24px) saturate(120%);
+    border: 1px solid rgba(255,255,255,.08);
+    border-top: 1px solid rgba(255,255,255,.15);
+    box-shadow:
+      0 8px 32px 0 rgba(0,0,0,.3),
+      inset 0 1px 0 0 rgba(255,255,255,.1);
+    border-radius: var(--r);
+    padding: 22px 20px;
+    margin-bottom: 16px;
+  }
+
+  .panel-label {
+    display:flex; align-items:center; gap:8px;
+    font-size:11px; font-weight:600; letter-spacing:.14em;
+    color: var(--fg3); text-transform:uppercase; margin-bottom:18px;
+  }
+  .panel-label svg { flex:none; }
+  .panel-label .spacer { flex:1; }
+  .panel-label .hint { font-weight:400; letter-spacing:.02em; text-transform:none; }
+
+  /* ===== 顶部 Nav ===== */
+  nav {
+    display:flex; align-items:center; justify-content:space-between;
+    padding: 22px 4px 20px;
+  }
+  nav .brand { font-size:15px; font-weight:600; letter-spacing:-.02em; }
+  nav .brand em { font-style:normal; color: var(--fg3); font-weight:500; margin-left:6px; letter-spacing:.1em; }
+  nav .status { font-size:11px; color: var(--fg3); letter-spacing:.04em; display:flex; align-items:center; gap:6px; }
+  .dot4 { width:4px; height:4px; border-radius:50%; background: var(--fg3); display:inline-block; }
+  .dot4.live { background: var(--accent); box-shadow: 0 0 6px rgba(52,211,153,.5); }
+
+  /* ===== 主资产卡 ===== */
+  #assetCard .bal-label { font-size:11px; color: var(--fg3); letter-spacing:.18em; }
+  #totalBal {
+    margin-top:10px; font-size:44px; font-weight:600; line-height:1.05;
+    letter-spacing:-.04em; font-feature-settings:"tnum" 1, "cv03" 1;
+  }
+  .bal-row { display:flex; margin-top:22px; padding-top:16px; border-top:1px solid rgba(255,255,255,.06); gap:16px; }
+  .bal-cell { flex:1; }
+  .bal-cell .k { font-size:10.5px; color: var(--fg3); letter-spacing:.12em; margin-bottom:6px; }
+  .bal-cell .v { font-size:15px; font-weight:500; color: var(--fg2); letter-spacing:-.02em; font-feature-settings:"tnum" 1; }
+  .bal-cell .v.pos { color: var(--accent); }
+  .bal-cell .v.neg { color: var(--neg); }
+
+  /* ===== 行情列表 ===== */
+  .mkt-row {
+    display:grid; grid-template-columns: 1fr auto 72px; align-items:center;
+    padding: 13px 2px; border-bottom:1px solid rgba(255,255,255,.05);
+  }
+  .mkt-row:last-child { border-bottom:none; padding-bottom:2px; }
+  .mkt-sym { display:flex; align-items:center; gap:9px; font-size:13px; font-weight:600; letter-spacing:.02em; }
+  .mkt-sym .st { width:4px; height:4px; border-radius:50%; background: var(--fg3); flex:none; }
+  .mkt-sym .st.ok { background: var(--accent); }
+  .mkt-sym .st.old { background: var(--warn); }
+  .mkt-sym .st.stale { background: var(--neg); }
+  .mkt-px { font-size:14px; font-weight:500; text-align:right; letter-spacing:-.02em; font-feature-settings:"tnum" 1; }
+  .mkt-meta { text-align:right; }
+  .mkt-meta .tm { font-size:10px; color: var(--fg3); letter-spacing:.04em; font-feature-settings:"tnum" 1; }
+  .mkt-meta .err { font-size:10px; color: var(--neg); }
+
+  /* ===== 持仓 ===== */
+  .pos-table { width:100%; border-collapse:collapse; }
+  .pos-table th {
+    text-align:left; font-size:10px; font-weight:500; color: var(--fg3);
+    letter-spacing:.12em; padding:0 0 9px; border-bottom:1px solid rgba(255,255,255,.05);
+  }
+  .pos-table th:last-child, .pos-table td:last-child { text-align:right; }
+  .pos-table td {
+    padding: 11px 0; font-size:13px; color: var(--fg2);
+    border-bottom:1px solid rgba(255,255,255,.04); letter-spacing:-.01em; font-feature-settings:"tnum" 1;
+  }
+  .pos-table tr:last-child td { border-bottom:none; }
+  .pos-table td:first-child { color: var(--fg); font-weight:600; }
+  .pos-table .side { font-size:11px; color: var(--fg3); }
+  .pos-table .pnl.pos { color: var(--accent); } .pos-table .pnl.neg { color: var(--neg); }
+  .empty {
+    text-align:center; color: var(--fg3); font-size:12.5px;
+    padding: 14px 0 4px; letter-spacing:.02em;
+  }
+
+  /* ===== 决策流 ===== */
+  .dec-row {
+    display:grid; grid-template-columns: 58px 1fr auto; align-items:center; gap:12px;
+    padding: 11px 2px; border-bottom:1px solid rgba(255,255,255,.05);
+  }
+  .dec-row:last-child { border-bottom:none; padding-bottom:2px; }
+  .dec-row .t { font-size:11px; color: var(--fg3); letter-spacing:.02em; font-feature-settings:"tnum" 1; }
+  .dec-row .w { font-size:12px; color: var(--fg2); letter-spacing:.01em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .chip {
+    font-size:10px; font-weight:600; letter-spacing:.06em; padding:4px 10px; border-radius:999px;
+    background: rgba(255,255,255,.05); color: var(--fg2); border:1px solid rgba(255,255,255,.06);
+  }
+  .chip.ok { background: rgba(52,211,153,.10); color: var(--accent); border-color: rgba(52,211,153,.16); }
+  .chip.act { background: rgba(161,161,170,.10); color: var(--fg2); border-color: rgba(161,161,170,.14); }
+
+  /* ===== 账本 ===== */
+  .tr-row {
+    display:grid; grid-template-columns: 1fr auto; align-items:center; gap:12px;
+    padding: 11px 2px; border-bottom:1px solid rgba(255,255,255,.05);
+  }
+  .tr-row:last-child { border-bottom:none; padding-bottom:2px; }
+  .tr-row .d { font-size:11px; color: var(--fg3); font-feature-settings:"tnum" 1; margin-left:10px; }
+  .tr-row .lft { display:flex; align-items:baseline; gap:8px; }
+  .tr-row .sym { font-size:12.5px; font-weight:600; color: var(--fg); letter-spacing:.01em; }
+  .tr-row .pnl { font-size:13px; font-weight:500; font-feature-settings:"tnum" 1; letter-spacing:-.01em; }
+  .pnl.pos { color: var(--accent); } .pnl.neg { color: var(--neg); }
+
+  /* ===== 参数 ===== */
+  .cfg-row { display:grid; grid-template-columns: 1fr auto; align-items:center; gap:14px; padding:11px 2px; border-bottom:1px solid rgba(255,255,255,.05); }
+  .cfg-row:last-child { border-bottom:none; }
+  .cfg-row label { font-size:12.5px; color: var(--fg2); letter-spacing:.01em; }
+  .cfg-row input {
+    width: 132px; padding: 8px 11px; background: rgba(255,255,255,.04);
+    color: var(--fg); border: 1px solid rgba(255,255,255,.10); border-radius: var(--rs);
+    font-family: var(--mono); font-size:12.5px; text-align:right; outline:none;
+    font-feature-settings:"tnum" 1; letter-spacing:-.01em;
+    transition: border-color .2s var(--ease), background .2s var(--ease);
+  }
+  .cfg-row input:focus { border-color: rgba(255,255,255,.24); background: rgba(255,255,255,.06); }
+  .save-bar { display:flex; align-items:center; justify-content:flex-end; gap:12px; margin-top:18px; }
+  #saveMsg { font-size:11px; color: var(--fg3); letter-spacing:.02em; }
+  #saveMsg.err { color: var(--neg); }
+  .btn-save {
+    appearance:none;
+    position:relative;
+    background: rgba(255,255,255,.03);
+    border: 1px solid rgba(255,255,255,.14);
+    color: var(--fg2);
+    font-size:12px; font-weight:500; letter-spacing:.12em;
+    padding: 9px 20px; border-radius: 10px; cursor:pointer;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    transition: color .25s var(--ease), border-color .25s var(--ease),
+                background .25s var(--ease), transform .15s var(--ease);
+  }
+  .btn-save:hover { color: var(--accent); border-color: rgba(52,211,153,.32); background: rgba(52,211,153,.05); }
+  .btn-save:active { transform: scale(.96); }
+
+  .foot { text-align:center; font-size:10.5px; color: var(--fg3); letter-spacing:.06em; margin-top:26px; }
+  .foot a { color: var(--fg3); text-decoration:none; border-bottom:1px dashed rgba(255,255,255,.18); transition: color .2s var(--ease), border-color .2s var(--ease); }
+  .foot a:hover { color: var(--accent); border-color: rgba(52,211,153,.4); }
+
+  /* ===== 快捷指令 ===== */
+  .cmd-grid { display:grid; grid-template-columns: repeat(3, 1fr); gap:8px; margin-bottom:12px; }
+  .cmd-btn {
+    appearance:none; cursor:pointer; border:1px solid rgba(255,255,255,.10);
+    background: rgba(255,255,255,.03); color: var(--fg2);
+    border-radius: var(--rs); padding:9px 4px; font-size:12px; letter-spacing:.04em;
+    font-family: var(--mono); transition: all .2s var(--ease);
+  }
+  .cmd-btn:hover { color: var(--accent); border-color: rgba(52,211,153,.3); background: rgba(52,211,153,.05); }
+  .cmd-btn:active { transform: scale(.96); }
+  .cmd-btn:disabled { opacity:.5; cursor:default; }
+  .cmd-btn.warn { border-color: rgba(251,191,36,.28); color: var(--warn); }
+  .cmd-btn.warn:hover { border-color: rgba(251,191,36,.55); background: rgba(251,191,36,.08); color: var(--warn); }
+  .cmd-out {
+    font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    font-size:11px; line-height:1.65; color: var(--fg2);
+    background: rgba(0,0,0,.32); border:1px solid rgba(255,255,255,.07);
+    border-radius: var(--rs); padding:12px 14px;
+    white-space:pre-wrap; word-break:break-all; max-height:260px; overflow:auto;
+    font-feature-settings:"tnum" 1;
+  }
+  .cmd-out .cmd-head { color: var(--fg3); font-size:10.5px; letter-spacing:.1em; margin-bottom:6px; }
+
+  /* ===== 保护警告条 ===== */
+  .alert-bar {
+    display:flex; align-items:flex-start; gap:10px;
+    background: linear-gradient(90deg, rgba(190,44,44,.16), rgba(190,44,44,.05));
+    border: 1px solid rgba(248,113,113,.45);
+    border-radius: 12px;
+    padding: 12px 14px; margin-bottom: 14px;
+    color:#fca5a5;
+    animation: alertPulse 2s ease-in-out infinite;
+  }
+  .alert-bar svg { flex:none; margin-top:1px; color:#f87171; }
+  .alert-body { flex:1; min-width:0; }
+  .alert-title { font-size:13px; font-weight:600; letter-spacing:.04em; color:#fca5a5; margin-bottom:3px; }
+  .alert-msg { font-size:11.5px; line-height:1.5; color:rgba(252,165,165,.85); word-break:break-all; }
+  .alert-ack {
+    flex:none; margin-left:auto; align-self:center;
+    background:rgba(248,113,113,.12); border:1px solid rgba(248,113,113,.45);
+    color:#fca5a5; border-radius:8px; padding:6px 12px;
+    font-size:11.5px; cursor:pointer; font-weight:500;
+    transition: background .2s, color .2s;
+  }
+  .alert-ack:hover { background:rgba(248,113,113,.25); color:#fff; }
+  @keyframes alertPulse { 0%,100%{ opacity:1; } 50%{ opacity:.72; } }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="brand">零号看板<em>ZERO</em></div>
+  <div class="status"><span class="dot4 live" id="netDot"></span><span id="netTxt">连接中</span><span id="navTime">--:--:--</span></div>
+</nav>
+
+<!-- 主资产 -->
+<div class="glass-panel" id="assetCard">
+  <div class="bal-label">总余额 · USDT</div>
+  <div id="totalBal">—</div>
+  <div class="bal-row">
+    <div class="bal-cell">
+      <div class="k">可用余额</div>
+      <div class="v" id="availBal">—</div>
+    </div>
+    <div class="bal-cell">
+      <div class="k">浮动盈亏</div>
+      <div class="v" id="uPnL">—</div>
+    </div>
+  </div>
+</div>
+
+<!-- 行情 -->
+<div class="glass-panel">
+  <div class="panel-label">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#52525B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>
+    行情快照
+    <span class="spacer"></span>
+    <span class="hint" id="snapHint">—</span>
+  </div>
+  <div id="snapList"><div class="empty">加载中…</div></div>
+</div>
+
+<!-- 保护警告条：核验补挂失败时醒目提示，人工处理 -->
+<div id="alertBar" class="alert-bar" style="display:none;">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+  <div class="alert-body">
+    <div class="alert-title" id="alertTitle">保护未挂全</div>
+    <div class="alert-msg" id="alertMsg">—</div>
+  </div>
+  <button id="alertAckBtn" class="alert-ack" onclick="ackAlert()">已处理，关闭</button>
+</div>
+
+<!-- 持仓 -->
+<div class="glass-panel">
+  <div class="panel-label">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#52525B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 17l9 5 9-5"/></svg>
+    当前持仓
+  </div>
+  <div id="posArea"><div class="empty">加载中…</div></div>
+</div>
+
+<!-- 决策流 -->
+<div class="glass-panel">
+  <div class="panel-label">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#52525B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+    最近决策
+  </div>
+  <div id="decList"><div class="empty">加载中…</div></div>
+</div>
+
+<!-- 账本 -->
+<div class="glass-panel">
+  <div class="panel-label">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#52525B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+    平仓账本
+  </div>
+  <div id="tradeList"><div class="empty">加载中…</div></div>
+</div>
+
+<!-- 快捷指令 -->
+<div class="glass-panel">
+  <div class="panel-label">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#52525B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+    快捷指令
+    <span class="spacer"></span>
+    <span class="hint">点击即查 · 同 Termux 指令</span>
+  </div>
+  <div class="cmd-grid">
+    <button class="cmd-btn" onclick="runCmd('snap')">行情 snap</button>
+    <button class="cmd-btn" onclick="runCmd('vwps')">进程 vwps</button>
+    <button class="cmd-btn" onclick="runCmd('wl')">日志 wl</button>
+    <button class="cmd-btn" onclick="runCmd('dec')">决策 dec</button>
+    <button class="cmd-btn" onclick="runCmd('decs')">决策简 decs</button>
+    <button class="cmd-btn" onclick="runCmd('ex')">执行 ex</button>
+    <button class="cmd-btn" onclick="runCmd('bal')">钱包 bal</button>
+    <button class="cmd-btn" onclick="runCmd('pos')">持仓 pos</button>
+    <button class="cmd-btn" onclick="runCmd('tr')">账本 tr</button>
+    <button class="cmd-btn warn" onclick="runCmd('vwres')">启动/重启 vwres</button>
+    <button class="cmd-btn warn" onclick="runCmd('res')">全套重启 res</button>
+  </div>
+  <div class="cmd-out" id="cmdOut"><span class="cmd-head">点上方按钮，这里显示结果</span></div>
+</div>
+
+<!-- 参数 -->
+<div class="glass-panel">
+  <div class="panel-label">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#52525B" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    参数
+    <span class="spacer"></span>
+    <span class="hint">保存即写入 cfg.json</span>
+  </div>
+  <div id="cfgArea"><div class="empty">加载中…</div></div>
+  <div class="save-bar">
+    <span id="saveMsg"></span>
+    <button class="btn-save" onclick="saveCfg()">保存</button>
+  </div>
+</div>
+
+<div class="foot"><a href="https://github.com/Tyytlym/llm-autonomous-trader" target="_blank">llm-autonomous-trader</a></div>
+
+<script>
+var refreshMs = 15000;
+
+/* ===== 字段单位表（cfg.json 里百分比单位混用，必须分字段处理）=====
+   vol_threshold_pct 存「百分数值」(0.5 = 0.5%)
+   tiers 存「比例小数」(0.002 = 0.2%)
+   trailing_atr_k 存「倍数」(2.5 = 2.5倍ATR) */
+var UNIT = {
+  'vol_threshold_pct':      ['%', 1,   1],
+  'min_sec_between_orders': ['秒', 1,  1],
+  'exit.tiers':             ['%', 100, 0.01],
+  'exit.tier1_r':           ['R', 1,   1],
+  'exit.tier2_r':           ['R', 1,   1],
+  'exit.trailing_atr_k':    ['倍', 1,  1]
+};
+
+async function fetchJSON(url) {
+  try { var r = await fetch(url); return await r.json(); }
+  catch (e) { return null; }
+}
+
+function fmtPnL(v) {
+  if (v === null || v === undefined) return '—';
+  var s = parseFloat(v);
+  return (s > 0 ? '+' : '') + s.toFixed(4);
+}
+
+function ageClass(min) {
+  if (min === null || min === undefined) return 'stale';
+  if (min > 2) return 'stale';
+  if (min > 1) return 'old';
+  return 'ok';
+}
+
+function hm(ts) {
+  if (!ts) return '—';
+  var d = new Date(ts);
+  return d.toTimeString().slice(0,8);
+}
+
+function render(data) {
+  if (!data) return;
+  var acc = data.account || {};
+
+  /* 保护警告条 */
+  var alerts = data.alerts || [];
+  var alertBar = document.getElementById('alertBar');
+  if (alerts.length) {
+    var a = alerts[0];
+    var missing = a.missing || '';
+    var sym = a.symbol || '';
+    var n = a.attempts || 3;
+    document.getElementById('alertTitle').textContent = '⚠ 保护未挂全 · ' + sym;
+    document.getElementById('alertMsg').textContent =
+      '开仓后回读交易所，出场保护缺 ' + missing + '（重试 ' + n + ' 次仍未补齐）。' +
+      '已保留仓位、未自动平仓，请尽快人工处理！';
+    alertBar.style.display = 'flex';
+    window._curAlertTs = a.ts || null;
+  } else {
+    alertBar.style.display = 'none';
+    window._curAlertTs = null;
+  }
+
+  var netDot = document.getElementById('netDot');
+  var netTxt = document.getElementById('netTxt');
+  netDot.className = 'dot4 live';
+  netTxt.textContent = '在线';
+  document.getElementById('navTime').textContent = hm(Date.now());
+
+  var tb = acc.totalWalletBalance;
+  document.getElementById('totalBal').textContent = tb !== undefined ? parseFloat(tb).toFixed(4) : '—';
+  document.getElementById('availBal').textContent = acc.availableBalance !== undefined ? parseFloat(acc.availableBalance).toFixed(4) : '—';
+
+  var up = parseFloat(acc.totalUnrealizedProfit || 0);
+  var uEl = document.getElementById('uPnL');
+  uEl.textContent = fmtPnL(acc.totalUnrealizedProfit);
+  uEl.className = 'v ' + (up < 0 ? 'neg' : 'pos');
+
+  /* 行情 */
+  var snaps = data.snapshots || {};
+  var snapHtml = '';
+  var okCount = 0;
+  ['BTCUSDT','ETHUSDT','SOLUSDT'].forEach(function(s) {
+    var it = snaps[s] || {ok:false};
+    if (!it.ok) {
+      snapHtml += '<div class="mkt-row"><div class="mkt-sym"><span class="st stale"></span>'+s+'</div><div class="mkt-meta"><span class="err">读不到</span></div><div></div></div>';
+      return;
+    }
+    if (it.age_min <= 2) okCount++;
+    snapHtml += '<div class="mkt-row">' +
+      '<div class="mkt-sym"><span class="st '+ageClass(it.age_min)+'"></span>'+s+'</div>' +
+      '<div class="mkt-px">'+it.price+'</div>' +
+      '<div class="mkt-meta"><div class="tm">'+hm(it.ts)+'</div><div class="tm">'+it.age_min+'min</div></div>' +
+      '</div>';
+  });
+  document.getElementById('snapList').innerHTML = snapHtml;
+  document.getElementById('snapHint').textContent = okCount + '/3 新鲜';
+
+  /* 持仓 */
+  var pos = acc.positions || [];
+  var posHtml = '';
+  if (!pos.length) {
+    posHtml = '<div class="empty">当前无持仓</div>';
+  } else {
+    posHtml = '<table class="pos-table"><tr><th>品种</th><th>方向</th><th>数量</th><th>浮盈</th></tr>';
+    pos.forEach(function(p) {
+      var side = p.positionAmt > 0 ? '多' : '空';
+      var pnl = parseFloat(p.unRealizedProfit||0);
+      posHtml += '<tr><td>'+p.symbol+'</td><td class="side">'+side+'</td><td>'+Math.abs(p.positionAmt)+'</td>' +
+        '<td class="pnl '+(pnl<0?'neg':'pos')+'">'+fmtPnL(pnl)+'</td></tr>';
+    });
+    posHtml += '</table>';
+  }
+  document.getElementById('posArea').innerHTML = posHtml;
+
+  /* 决策流 */
+  var decs = data.decisions || [];
+  var decHtml = '';
+  if (!decs.length) {
+    decHtml = '<div class="empty">暂无决策记录</div>';
+  } else {
+    decs.forEach(function(d) {
+      var acts = d.acts || [];
+      var actTxt = acts.join(',') || '—';
+      var cls = 'act';
+      if (acts.indexOf('hold') >= 0) cls = 'ok';
+      decHtml += '<div class="dec-row">' +
+        '<span class="t">'+(d.ts?hm(d.ts):'—')+'</span>' +
+        '<span class="w">'+(d.wake||'')+'</span>' +
+        '<span class="chip '+cls+'">'+actTxt+'</span></div>';
+    });
+  }
+  document.getElementById('decList').innerHTML = decHtml;
+
+  /* 账本 */
+  var trades = data.trades || [];
+  var trHtml = '';
+  if (!trades.length) {
+    trHtml = '<div class="empty">还没有平仓记录</div>';
+  } else {
+    var total = 0;
+    trades.forEach(function(t) {
+      total += (t.net_pnl||0);
+      var side = t.side === 'long' ? '多' : '空';
+      trHtml += '<div class="tr-row"><div class="lft">' +
+        '<span class="sym">'+t.symbol+' '+side+'</span>' +
+        '<span class="d">'+hm(t.ts)+'</span></div>' +
+        '<span class="pnl '+(t.net_pnl<0?'neg':'pos')+'">'+fmtPnL(t.net_pnl)+'</span></div>';
+    });
+    trHtml += '<div class="tr-row"><div class="lft"><span class="sym">合计 '+trades.length+' 笔</span></div>' +
+      '<span class="pnl '+(total<0?'neg':'pos')+'">'+fmtPnL(total)+'</span></div>';
+  }
+  document.getElementById('tradeList').innerHTML = trHtml;
+
+  renderCfg(data);
+}
+
+/* ===== 参数渲染 / 保存 ===== */
+function fmtCfgVal(k, v) {
+  var u = UNIT[k] || ['', 1, 1];
+  var num;
+  if (Array.isArray(v)) {
+    num = v.map(function(x){ return Math.round(parseFloat(x)*u[1]*1000)/1000; }).join(', ');
+  } else {
+    num = Math.round(parseFloat(v)*u[1]*1000)/1000;
+  }
+  return num + (u[0] ? ' ' + u[0] : '');
+}
+
+function parseCfgVal(k, raw) {
+  var u = UNIT[k] || ['', 1, 1];
+  if (k === 'exit.tiers') {
+    return String(raw).split(/[,，\s]+/).map(function(s){ return parseFloat(s)*u[2]; })
+      .filter(function(n){ return !isNaN(n); });
+  }
+  var n = parseFloat(raw);
+  if (isNaN(n)) return null;
+  return n * u[2];
+}
+
+function renderCfg(data) {
+  var cfg = data.cfg || {};
+  var exit = data.exit || {};
+  var editable = data.editable || {};
+  var html = '';
+  var all = [];
+  Object.keys(editable).forEach(function(k) {
+    var v = k.indexOf('exit.') === 0 ? exit[k.split('.')[1]] : cfg[k];
+    if (v === undefined) return;
+    all.push({k:k, label:editable[k], v:v});
+  });
+  all.forEach(function(it) {
+    html += '<div class="cfg-row"><label>'+it.label+'</label>' +
+      '<input type="text" id="cfg_'+it.k.replace('.','_')+'" value="'+fmtCfgVal(it.k, it.v)+'"></div>';
+  });
+  if (!all.length) html = '<div class="empty">无可用参数</div>';
+  document.getElementById('cfgArea').innerHTML = html;
+}
+
+function setMsg(txt, isErr) {
+  var el = document.getElementById('saveMsg');
+  el.textContent = txt;
+  el.className = isErr ? 'err' : '';
+  setTimeout(function(){ el.textContent=''; el.className=''; }, 4000);
+}
+
+async function saveCfg() {
+  var data = await fetchJSON('/api/state');
+  var editable = data && data.editable;
+  if (!editable) { setMsg('读取配置失败', true); return; }
+  var payload = {};
+  var exit = {};
+  var err = null;
+  Object.keys(editable).forEach(function(k) {
+    var el = document.getElementById('cfg_' + k.replace('.','_'));
+    if (!el) return;
+    var raw = el.value;
+    if (k === 'exit.tiers') {
+      var arr = parseCfgVal(k, raw);
+      if (!arr.length) { err = '分批止盈比例无效'; return; }
+      if (arr.reduce(function(a,b){return a+b;},0) > 1.0001) { err = '止盈总占比超过100%'; return; }
+      exit[k.split('.')[1]] = arr;
+      return;
+    }
+    var v = parseCfgVal(k, raw);
+    if (v === null) { err = k + ' 数值无效'; return; }
+    if (k === 'vol_threshold_pct' && (v <= 0 || v > 20)) { err = '波动阈值需在 0~20 之间'; return; }
+    if (k.indexOf('exit.')===0) exit[k.split('.')[1]] = v;
+    else payload[k] = v;
+  });
+  if (err) { setMsg('⚠ ' + err, true); return; }
+  if (Object.keys(exit).length) payload.exit = exit;
+  var r = await fetch('/api/cfg', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(payload)});
+  var j = await r.json();
+  setMsg(j.ok ? '已保存到 cfg.json' : ('保存失败: ' + j.error), !j.ok);
+}
+async function refresh() {
+  var data = await fetchJSON('/api/state');
+  if (data) { render(data); }
+  else {
+    document.getElementById('netDot').className = 'dot4';
+    document.getElementById('netTxt').textContent = '离线';
+    document.getElementById('navTime').textContent = hm(Date.now());
+  }
+}
+
+/* 标记当前警告为已处理：调后端把最新一条 acked=true，条子消失（历史保留） */
+async function ackAlert() {
+  var btn = document.getElementById('alertAckBtn');
+  var ts = window._curAlertTs;
+  try {
+    var r = await fetch('/api/alerts/ack', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(ts ? {ts: ts} : {})
+    });
+    var j = await r.json();
+    if (j && j.ok) {
+      document.getElementById('alertBar').style.display = 'none';
+      window._curAlertTs = null;
+    } else {
+      alert('标记失败: ' + ((j && j.error) || '未知错误'));
+    }
+  } catch (e) {
+    alert('请求失败: ' + e);
+  }
+}
+
+/* ===== 快捷指令 ===== */
+function runCmd(name) {
+  var el = document.getElementById('cmdOut');
+  el.innerHTML = '<span class="cmd-head">' + name + ' …</span>';
+  fetch('/api/cmd?name=' + encodeURIComponent(name))
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if (j && j.ok) {
+        el.innerHTML = '<span class="cmd-head">' + j.label + ' · ' + name + '</span>\n' + escapeHtml(clipLines(j.out || '', 200));
+      } else {
+        el.innerHTML = '<span class="cmd-head">错误</span>\n' + ((j && j.error) || '查询失败');
+      }
+    })
+    .catch(function(e){
+      el.innerHTML = '<span class="cmd-head">请求失败</span>\n' + e;
+    });
+}
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function clipLines(s, max) {
+  // 超长行截断（决策 JSON 一行几百字符，整行显示会撑爆输出框）
+  return String(s).split('\n').map(function(l){
+    return l.length > max ? l.slice(0, max) + ' …' : l;
+  }).join('\n');
+}
+refresh();
+setInterval(refresh, refreshMs);
+</script>
+</body>
+</html>

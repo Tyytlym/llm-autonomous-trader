@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>快捷指令速查</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f4f5f7; color: #1c1e21; max-width: 640px; margin: 0 auto;
+    padding: 20px 16px 40px; line-height: 1.6;
+  }
+  .page { display: none; }
+  .page.active { display: block; animation: fadeIn .2s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+  header { text-align: center; margin-bottom: 20px; }
+  header h1 { font-size: 24px; letter-spacing: 1px; }
+  header p { color: #8a8f98; font-size: 13px; margin-top: 4px; }
+  .badge { display: inline-block; background: linear-gradient(135deg,#5b7cfa,#8f5bfa); color:#fff;
+    font-size: 11px; padding: 3px 10px; border-radius: 20px; margin-top: 8px; letter-spacing: 2px; }
+
+  .card {
+    background: #fff; border-radius: 14px; padding: 14px 16px; margin: 10px 0;
+    display: flex; align-items: center; gap: 14px; cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0,0,0,.06); border: 1px solid #eee;
+    transition: transform .1s, box-shadow .15s;
+  }
+  .card:active { transform: scale(.98); box-shadow: 0 1px 1px rgba(0,0,0,.05); }
+  .cmd-name {
+    font-family: Menlo, Consolas, monospace; font-size: 16px; font-weight: 700;
+    background: linear-gradient(135deg,#5b7cfa,#8f5bfa); -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent; min-width: 72px; text-align: center;
+  }
+  .cmd-desc { flex: 1; font-size: 14px; color: #444; }
+  .card .arrow { color: #c6c9cf; font-size: 18px; }
+
+  .back {
+    display: inline-flex; align-items: center; gap: 6px; color: #5b7cfa;
+    font-size: 15px; cursor: pointer; margin-bottom: 16px; padding: 6px 0;
+  }
+  .detail-header { background: linear-gradient(135deg,#5b7cfa,#8f5bfa); color: #fff;
+    border-radius: 14px; padding: 20px; margin-bottom: 16px; }
+  .detail-header .big { font-family: Menlo, Consolas, monospace; font-size: 30px; font-weight: 800; letter-spacing: 2px; }
+  .detail-header .sub { font-size: 14px; opacity: .9; margin-top: 6px; }
+  .section { background: #fff; border-radius: 14px; padding: 16px; margin: 12px 0; border: 1px solid #eee; }
+  .section h4 { font-size: 13px; color: #8a8f98; margin-bottom: 8px; font-weight: 600; letter-spacing: 1px; }
+  .section p { font-size: 14px; color: #333; margin: 4px 0; }
+  .section b { color: #1c1e21; }
+  pre { background: #1e2227; color: #7bed9f; padding: 12px; border-radius: 10px;
+    font-size: 12.5px; overflow-x: auto; font-family: Menlo, Consolas, monospace; line-height: 1.5; }
+  ul { padding-left: 18px; }
+  ul li { font-size: 14px; color: #333; margin: 5px 0; }
+
+  .tip { background: #fffbe6; border-left: 4px solid #f7b731; padding: 12px 14px;
+    border-radius: 8px; font-size: 14px; margin: 12px 0; }
+  .tip b { color: #b06b00; }
+</style>
+</head>
+<body>
+
+<div id="page-home" class="page active">
+  <header>
+    <h1>⚡ 快捷指令</h1>
+    <p>Termux 里查决策 · 看快照 · 管 volwatch</p>
+    <span class="badge">点指令看详情</span>
+  </header>
+
+  <div class="tip">💡 记忆口诀：<b>v 开头</b>是 volwatch 家；<b>dec 开头</b>看决策；<b>其余按功能走</b>。</div>
+
+  <div id="cardList"></div>
+</div>
+
+<div id="page-detail" class="page">
+  <span class="back" onclick="goHome()">← 返回指令列表</span>
+  <div class="detail-header">
+    <div class="big" id="dName"></div>
+    <div class="sub" id="dIntro"></div>
+  </div>
+  <div class="section" id="dExample" style="display:none">
+    <h4>效果长这样</h4>
+    <pre id="dExampleCode"></pre>
+  </div>
+  <div class="section">
+    <h4>使用说明</h4>
+    <ul id="dPoints"></ul>
+  </div>
+</div>
+
+<script>
+var CMDS = [
+  { n:"snap", intro:"查三品种快照：价格 + 新鲜度", points:["显示 BTC/ETH/SOL 的价格和快照年龄（几分钟前刷的）","新鲜线是 2 分钟，超过 2 分钟 guard 会拒单","显示「读不到」= 快照没生成或脚本没在跑"],
+    ex:"BTCUSDT  price=67000.5    age=0.8分钟\nETHUSDT  price=2400.3     age=0.8分钟" },
+  { n:"vwres", intro:"重启 volwatch（杀干净 → 单起一个）", points:["内部就是 pkill 杀干净 → 等 1 秒 → nohup 单起一个","重启会打断正在跑的监控，但不动交易所已挂的 SL/TP 单","重启后敲 vwps 确认只有一个进程"],
+    ex:null },
+  { n:"vwps", intro:"查 volwatch 进程在不在跑", points:["输出带完整命令行，正常应该是刚好一行","多行 = 有多个 volwatch，用 vwres 重启一次","「没在跑」就敲 vwres 拉起来"],
+    ex:"27451 pts/3 00:00:02 python bin/volwatch.py" },
+  { n:"dec", intro:"看最近 3 条决策原文", points:["JSON 原始日志，比较长，适合细看","今天没决策文件会自动翻最近一天"],
+    ex:null },
+  { n:"decs", intro:"决策精简版：时间 | 模型 | 原因 | 动作", points:["一行一条：时间、模型、唤醒原因、动作","想多看几条：把 [-5:] 改成 [-10:]"],
+    ex:"10-24 14:30:22 | GLM-5.3-Flash | 波动触发 | ['hold']\n10-24 14:35:18 | GLM-5.3-Flash | 兜底 | ['hold']" },
+  { n:"wl", intro:"看 volwatch 实时输出尾巴", points:["显示 volwatch_live.out 最后 50 行","排障首选：监控在干嘛、有没有报错，一敲便知"],
+    ex:null },
+  { n:"ex", intro:"看今天执行日志（下单记录+结果）", points:["显示今天 exec_日期.jsonl 最后 30 行","下单记录、成交结果、平仓清单一目了然","今天没日志自动翻最近一天"],
+    ex:null },
+  { n:"bal", intro:"看钱包：总余额 | 可用 | 浮盈", points:["读最近一份快照的账户数据，来自交易所实时接口","总余额、可用、浮盈三项"],
+    ex:"总余额=4997.6964  可用=4697.6964  浮盈=0.0000" },
+  { n:"pos", intro:"看当前持仓：方向/数量/入场/现价/浮盈", points:["有持仓显示每仓明细，没持仓显示「当前无持仓」","方向（多/空）、数量、入场价、现价、浮盈"],
+    ex:"ETHUSDT  多 0.1240  入场=2412.3000 现价=2409.7100 浮盈=-0.3210" },
+  { n:"tr", intro:"看平仓账本：最近 10 笔 + 累计净盈亏", points:["每笔含入场/出场/数量/净盈亏（已含手续费）","末尾带全部笔数与累计净盈亏","复盘零号止盈止损水平用"],
+    ex:"10-24 15:02 | ETHUSDT 多 qty=0.1240 入=2412.3000 出=2409.7100 净盈亏=-0.3210 (drawdown)\n---- 全部 3 笔 累计净盈亏 +12.3456 ----" }
+];
+
+function renderHome() {
+  var el = document.getElementById('cardList');
+  el.innerHTML = '';
+  CMDS.forEach(function(c) {
+    var d = document.createElement('div');
+    d.className = 'card';
+    d.innerHTML = '<span class="cmd-name">' + c.n + '</span>' +
+      '<span class="cmd-desc">' + c.intro + '</span>' +
+      '<span class="arrow">›</span>';
+    d.onclick = function() { goDetail(c.n); };
+    el.appendChild(d);
+  });
+}
+
+function goDetail(name) {
+  var c = null;
+  CMDS.forEach(function(x) { if (x.n === name) c = x; });
+  if (!c) return;
+  document.getElementById('dName').textContent = c.n;
+  document.getElementById('dIntro').textContent = c.intro;
+  var pts = '';
+  c.points.forEach(function(p) { pts += '<li>' + p + '</li>'; });
+  document.getElementById('dPoints').innerHTML = pts;
+  var ex = document.getElementById('dExample');
+  if (c.ex) {
+    ex.style.display = 'block';
+    document.getElementById('dExampleCode').textContent = c.ex;
+  } else {
+    ex.style.display = 'none';
+  }
+  show('page-detail');
+}
+
+function goHome() { show('page-home'); }
+
+function show(id) {
+  document.querySelectorAll('.page').forEach(function(p) { p.classList.remove('active'); });
+  document.getElementById(id).classList.add('active');
+  window.scrollTo(0, 0);
+}
+
+renderHome();
+</script>
+</body>
+</html>

@@ -5,7 +5,7 @@ import math
 import time
 # ===================== 风控参数（唯一配置点） =====================
 WHITELIST = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
-MAX_NOTIONAL_USDT = 3000.0  # 单笔名义上限（2026-10-22 用户拍板 1500->3000）
+NOTIONAL_RATIO = 0.50       # 单笔名义上限 = 余额 x 50%（2026-10-25 用户拍板，无固定兜底）
 MAX_LEVERAGE = 10
 RISK_PCT = 0.30             # 单笔风险 <= 余额30%（按止损距离反算）
 MAX_SNAPSHOT_AGE_MS = 120000  # 快照时效上限2分钟（快照timestamp为毫秒）
@@ -88,8 +88,16 @@ def check(text, snapshot):
     notional = d.get("notional_usdt")
     if not isinstance(notional, (int, float)) or isinstance(notional, bool) or notional <= 0:
         reasons.append("notional_usdt非法: " + str(notional))
-    elif notional > MAX_NOTIONAL_USDT:
-        reasons.append("名义%s超上限%s" % (notional, MAX_NOTIONAL_USDT))
+    else:
+        # 名义动态上限：余额 x NOTIONAL_RATIO（唯一限制，无固定兜底；余额缺失/非法时拒单）
+        cap = None
+        bal_for_cap = acc.get("balance_usdt")
+        if isinstance(bal_for_cap, (int, float)) and not isinstance(bal_for_cap, bool) and not bad_num(bal_for_cap) and bal_for_cap > 0:
+            cap = round(bal_for_cap * NOTIONAL_RATIO, 2)
+        if cap is None:
+            reasons.append("账户无有效余额，无法核定名义上限")
+        elif notional > cap:
+            reasons.append("名义%s超上限%s(余额%s x 50%%)" % (notional, cap, bal_for_cap))
     lev = d.get("leverage")
     if not isinstance(lev, (int, float)) or isinstance(lev, bool) or lev < 1 or lev > MAX_LEVERAGE:
         reasons.append("杠杆非法或超上限: " + str(lev))

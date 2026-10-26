@@ -4,7 +4,6 @@
 import ast
 import json
 import os
-import re
 import sys
 from decimal import Decimal
 
@@ -41,6 +40,8 @@ def main():
             print("  FAIL", p, "->", repr(e))
 
     print("== 2) split_tiers 分档逻辑 ==")
+    # 从 executor.py 里提取 split_tiers 做隔离测试（避免 import 触发网络/签名）
+    import re
     src = open(os.path.join(BIN, "executor.py"), encoding="utf-8").read()
     m = re.search(r"def split_tiers\(.*?\n\ndef ", src, re.S)
     if not m:
@@ -68,7 +69,7 @@ def fmt_qty(sym, qty):
     assert r[0][1] == "0.09" and r[1][1] == "0.09" and t == "0.12", (r, t)
     print("  OK   0.3 -> 档1/档2=0.09/0.09 尾仓=0.12")
 
-    # 用例2: 数量 0.1，step=0.001，30%档=0.03 >= step，应正常拆档
+    # 用例2: 数量 0.1，step=0.001，30%档=0.03 ≥ step，应正常拆档
     r, t = split_tiers(0.1, [0.30, 0.30, 0.40], "BTCUSDT")
     assert r[0][1] == "0.03" and r[1][1] == "0.03" and t == "0.04", (r, t)
     print("  OK   0.1 -> 档1/档2=0.03/0.03 尾仓=0.04")

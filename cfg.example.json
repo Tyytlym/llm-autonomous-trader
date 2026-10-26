@@ -1,14 +1,11 @@
 {
-  "_comment": "复制为 cfg.json 后按需修改。model_endpoint 可指向任意 OpenAI 兼容接口，例如 https://你的服务商域名/v1/chat/completions",
+  "_comment": "复制为 cfg.json 后按需修改。model 可指向任意 OpenAI 兼容接口。risk_pct / max_notional_usdt 为历史遗留摆设（guard.py 已改为 NOTIONAL_RATIO 比例制），可留可删，不影响运行。",
   "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
-  "risk_pct": 0.02,
-  "max_notional_usdt": 500,
+  "risk_pct": 0.3,
+  "max_notional_usdt": 3000,
   "vol_threshold_pct": 0.5,
   "snapshot_max_age_ms": 120000,
-  "model_endpoint": "https://your-provider.example.com/v1/chat/completions",
-  "model": "your-model-name",
-  "model_temperature": 0.2,
-  "model_max_tokens": 2000,
+  "model": "deepseek-ai/DeepSeek-V4.1-Flash",
   "min_sec_between_orders": 60,
   "recover_loss_streak_max": 3,
   "cooldown_after_streak_min": 60,
@@ -17,8 +14,9 @@
     "tier1_r": 1.0,
     "tier2_r": 2.0,
     "be_buffer_pct": 0.002,
+    "trailing_atr_k": 2.5,
     "trailing_callback_pct": 1.0,
-    "trailing_activation_r": 2.0,
-    "pullback_close_pct": 0.6
-  }
+    "trailing_activation_r": 2.0
+  },
+  "exit_manage": false
 }
